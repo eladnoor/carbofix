@@ -4,7 +4,6 @@
 # pydot - a python interface for graphviz (which requires the libraries graphviz and networkx)
 ################################################################################
 
-import os
 import sys
 import re
 import util
@@ -12,6 +11,7 @@ import pydot
 import csv
 import pylab
 import gzip
+import numpy as np
 
 def parse_reaction_formula_side(s):
     """ parse the side formula, e.g. '2 C00001 + C00002 + 3 C00003'
@@ -95,13 +95,16 @@ class KeggReactionNotBalancedException(Exception):
     def __str__(self):
         return repr(self.value)
     
-class Reaction:
+class Reaction(object):
     def __init__(self, name, rid, sparse_reaction, weight=1):
         self.name = name
         self.rid = rid
         self.sparse_reaction = sparse_reaction
         self.weight = weight
         
+    def __cmp__(self, other):
+        return self.name.cmp(other.name)
+    
     def get_cids(self):
         return set(self.sparse_reaction.keys())
     
@@ -158,10 +161,7 @@ class Kegg:
         
         self.reactions = []
         
-        if (log_file != None):
-            self.LOG_FILE = log_file
-        else:
-            self.LOG_FILE = sys.stderr
+        self.LOG_FILE = log_file or sys.stderr
             
     def prepare_all(self, UPDATE_FILE):
         self.parse_database()    
@@ -354,6 +354,7 @@ class Kegg:
         """
         
         unique_reactions = {}
+        unique_reaction_names = set()
         for r in self.reactions:
             if (r.rid in self.banned_reactions):
                 self.LOG_FILE.write("This reaction has been banned: %s\n" % r.name)
@@ -367,12 +368,18 @@ class Kegg:
                 s = r.unique_string()
                 if (s not in unique_reactions):
                     unique_reactions[s] = r
+                    
+                if r.name in unique_reaction_names:
+                    self.LOG_FILE.write("Warning: Duplicate reaction %s appears with different formulae\n" % r.name)
+                else:
+                    unique_reaction_names.add(r.name)
 
         self.reactions = unique_reactions.values()
 
     def add_reaction(self, rid, direction, sparse_reaction, name=None, weight=1):
-        if (name == None):
+        if name is None:
             name = "R%05d" % rid
+       
         if (direction in ["=>", "<=>"]):
             self.reactions.append(Reaction(name + "_F", rid, sparse_reaction, weight))
         if (direction in ["<=", "<=>"]):
@@ -403,21 +410,20 @@ class Kegg:
         sys.stderr.write("%d reactions with %d unique compounds\n" % (Nreactions, Ncompounds))
     
         # Create the columns, name the reactions (RID) in the stoichiometric matrix
-        S = pylab.zeros((Ncompounds, Nreactions))
+        S = np.zeros((Ncompounds, Nreactions))
         rids = []
-        f = []
+        f = np.zeros((1, Nreactions))
         for j in range(Nreactions):
             r = self.reactions[j]
             rids.append(r.name)
-            if (r.weight != 0):
-                f.append((j, r.weight))
+            f[0, j] = r.weight
             
-            for (cid, count) in r.sparse_reaction.iteritems():
+            for cid, count in r.sparse_reaction.iteritems():
                 if (cid in cids):
                     i = cids.index(cid)
                     S[i, j] = count
                         
-        return (f, S, cids, rids)
+        return f, S, cids, rids
     
     def create_compound_node(self, Gdot, cid, name):
         node = self.get_node(Gdot, name)
